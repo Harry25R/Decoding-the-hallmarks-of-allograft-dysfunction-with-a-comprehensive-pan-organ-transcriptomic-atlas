@@ -1,8 +1,10 @@
 ---
-title: "Untitled"
+title: "Figure 2"
 author: "Harry Robertson"
-date: '2024-03-04'
-output: html_document
+date: '2023-03-04'
+output: 
+  html_document:
+    code_folding: hide
 ---
 
 ```{r setup, include=FALSE}
@@ -14,7 +16,7 @@ library(directPA)
 
 # Figure 2
 
-## Identification of a pan-organ rejection signal across solid organ transplantation. 
+## Identification of a pan-organ rejection signal across solid organ transplantation.
 
 ### Figure 2A
 
@@ -98,11 +100,8 @@ library(GGally)
 library(ggfortify)
 
 df_venn <- abs(df) > 2 
-df_venn %>%
-  data.frame()
 
 chi_square <- chisq.test(apply(df_venn, 2, table))
-chi_square$residuals
 
 tab <- table(df_venn[,1], df_venn[,2], df_venn[,3], df_venn[, 4])
 tab <- as.data.frame(tab)
@@ -114,7 +113,6 @@ df_venn %>%
   geom_venn(aes(A = Kidney.value, B = Liver.value, C = Lung.value, D = Heart.value),show_percentage = F,
             set_names = c("Kidney", "Liver", "Lung", "Heart")) + theme_void()
 ```
-
 
 ```{r}
 library(UpSetR)
@@ -159,5 +157,877 @@ pheatmap::pheatmap(Z.Score.Significant,
          cellheight = 10,
          angle_col = 315,
          show_colnames = FALSE)
-
 ```
+
+### Figure 2C-F
+
+```{r}
+suppressPackageStartupMessages({
+  library(SingleCellExperiment)
+  library(Cepo)
+  library(ggplot2)
+  library(dplyr)
+  library(ggpubr)
+})
+```
+
+```{r}
+goi_mat = data.frame(gene = names(pvalue2sided), z = gene.zscores, p = pvalue2sided)
+goi_mat2 = goi_mat[is.infinite(goi_mat$z),]
+goi_mat = goi_mat[!is.infinite(goi_mat$z),]
+goi_mat = goi_mat[order(goi_mat$z, decreasing = TRUE),]
+goi_mat$gene[1:50]
+
+goi_rank = rank(goi_mat$p)
+names(goi_rank) = goi_mat$gene
+
+idx_gene = goi_mat$p < 1*10^-35 
+goi = goi_mat$gene[idx_gene]
+length(goi)
+```
+
+```{r}
+f = list.files("~/Desktop/For_Hani")
+
+seuList = lapply(f, function(x) readRDS(paste0("~/Desktop/For_Hani/", x)))
+seuList = unlist(seuList, recursive = FALSE)
+
+geneIdx = Reduce(intersect, lapply(seuList, function(x) toupper(rownames(x@assays$RNA@counts))))
+
+counter <- 0
+sceList = lapply(seuList, function(x) {
+  
+  counter <<- counter + 1 
+  print(counter)
+  sce = SingleCellExperiment::SingleCellExperiment(assay = list(counts = x@assays$RNA@counts),
+                                                   colData = x@meta.data)
+  rownames(sce) = toupper(rownames(x@assays$RNA@counts))
+  sce = sce[geneIdx,]
+  cellIdx = colSums(counts(sce) == 0)/nrow(sce)
+  sce = sce[,cellIdx < 1]
+  sce = scater::logNormCounts(sce)
+  return(sce)
+  
+})
+
+sapply(sceList, function(x) {
+  unique(x$Condition)
+})
+
+# minor 
+sapply(sceList, function(x) {
+  idx = grep("predicted", colnames(colData(x)), value = TRUE)
+  idx = grep("l2|level_3", idx, value = TRUE)
+  idx = idx[!grepl("score", idx)]
+  table(colData(x)[, idx])
+})
+
+# major
+sapply(sceList, function(x) {
+  idx = grep("predicted", colnames(colData(x)), value = TRUE)
+  idx = grep("l1|level_2", idx, value = TRUE)
+  idx = idx[!grepl("score", idx)]
+  table(colData(x)[, idx])
+})
+
+counter <- 0
+cepoList = lapply(sceList, function(x) {
+  
+  counter <<- counter + 1
+  print(counter)
+  idx = grep("predicted", colnames(colData(x)), value = TRUE)
+  idx = grep("l2|level_3", idx, value = TRUE)
+  idx = idx[!grepl("score", idx)]
+  
+  idx2 = grep("predicted", colnames(colData(x)), value = TRUE)
+  idx2 = grep("l1|level_2", idx2, value = TRUE)
+  idx2 = idx2[!grepl("score", idx2)]
+  
+  colData(x)$celltype_minor = colData(x)[, idx]
+  colData(x)$celltype_major = colData(x)[, idx2]
+  colData(x)$celltype = paste0(colData(x)$celltype_major, "___", colData(x)$celltype_minor, "___", colData(x)$Condition)
+  
+  cty = names(table(x$celltype))[which(table(x$celltype) > 10)]
+  #print(length(cty))
+  x_subset = x[, x$celltype %in% cty]
+  
+  res = Cepo::Cepo(logcounts(x_subset),
+                   x_subset$celltype,
+                   exprsPct = 0.05, minCells = 10)
+  return(res)
+  
+})
+```
+
+
+```{r}
+#top 200-45 or 100-39
+topGenes = unique(unlist(lapply(cepoList, function(x) unique(unlist(Cepo::topGenes(x, n = 100))))))
+length(topGenes)
+table(topGenes %in% goi)
+
+cepoMat = lapply(cepoList, function(x) {
+  idx = intersect(rownames(x$stats), topGenes)
+  return(x$stats[idx,])
+})
+
+lapply(cepoMat, function(x) table(rownames(x) %in% goi))
+
+lapply(c(1*10^-10, 0.01, 0.05), function(p_cut) {
+  
+  tmp = goi_mat[goi_mat$z > 0, ]
+  idx_gene = tmp$p < p_cut
+  goi1 = tmp$gene[idx_gene]
+  
+  tmp = goi_mat[goi_mat$z < 0, ]
+  idx_gene = tmp$p < p_cut
+  goi2 = tmp$gene[idx_gene]
+  
+  print(c(length(goi1), length(goi2)))
+  
+})
+
+pList = lapply(c(1*10^-10), function(p_cut) {
+  
+  idx_gene = goi_mat$p < p_cut & goi_mat$z > 0
+  goi1 = goi_mat$gene[idx_gene]
+  idx_gene = goi_mat$p < p_cut & goi_mat$z < 0
+  goi2 = goi_mat$gene[idx_gene]
+  
+  matEnrich = do.call(rbind, lapply(1:length(cepoMat), function(x) {
+    
+    mat = do.call(rbind, lapply(1:ncol(cepoMat[[x]]), function(y) {
+      
+      geneStats = rank(cepoMat[[x]][,y])
+      #geneIdx = intersect(names(goi_rank), names(test))
+      
+      p.in.up <- intersect(names(geneStats), goi1)
+      p.out.up <- setdiff(names(geneStats), goi1)
+      
+      p.in.down <- intersect(names(geneStats), goi2)
+      p.out.down <- setdiff(names(geneStats), goi2)
+      
+      wilcoxTest.mat <- matrix("NA", ncol = 4, nrow = 2)
+      colnames(wilcoxTest.mat) <- c("cty", "pvalue", "# of substrates",
+                                    "dir")
+      
+      wilcoxTest.mat[1, 1] <- colnames(cepoMat[[x]])[[y]]
+      wilcoxTest.mat[1, 2] <- stats::wilcox.test(geneStats[p.in.up],
+                                                 geneStats[p.out.up], alternative = "greater")$p.value
+      wilcoxTest.mat[1, 3] <- length(p.in.up)
+      wilcoxTest.mat[1, 4] <- "up"
+      
+      wilcoxTest.mat[2, 1] <- colnames(cepoMat[[x]])[[y]]
+      wilcoxTest.mat[2, 2] <- stats::wilcox.test(geneStats[p.in.down],
+                                                 geneStats[p.out.down], alternative = "greater")$p.value
+      wilcoxTest.mat[2, 3] <- length(p.in.down)
+      wilcoxTest.mat[2, 4] <- "down"
+      
+      
+      res = as.data.frame(wilcoxTest.mat[,1:4, drop = FALSE])
+      res$dataset = x
+      res$condition = unique(sceList[[x]]$Condition)
+      return(res)
+      
+    }))
+    mat = as.data.frame(mat)
+    mat$pvalue = as.numeric(mat$pvalue)
+    return(mat)
+    
+  }))
+  
+  matEnrich$cty[-log10(matEnrich$pvalue) > 2]
+  matEnrich$interaction = interaction(matEnrich$cty, matEnrich$condition)
+  matEnrich$major = sapply(strsplit(matEnrich$cty, "___"), "[[", 1)
+  matEnrich$minor = sapply(strsplit(matEnrich$cty, "___"), "[[", 2)
+  
+  #matEnrich$major[matEnrich$minor %in% c("T", "B", "NK", "Natural.Killer.T")] = "Lymphoid"
+  matEnrich$logpvalue = -log10(matEnrich$pvalue)
+  matEnrich$group = paste0(matEnrich$major, "_", matEnrich$dir)
+  
+  p = ggplot(matEnrich, aes(x = as.factor(dir), 
+                            y = -log10(pvalue), fill = as.factor(condition))) + 
+    ggtitle(p_cut) + 
+    geom_boxplot(show.legend = TRUE, notch = FALSE) + facet_wrap(~major, ncol = 8)
+  
+  p = ggboxplot(matEnrich, x = "condition", y= "logpvalue", facet.by = "group", fill = "condition",
+            add = "jitter", palette = "npg") + 
+    stat_compare_means(aes(method = "wilcox.test", label = paste0("p = ", after_stat(p.format))))
+  
+  return(p)
+  
+})
+
+ptosave = pList[[1]]
+ptosave %>% ggsave(filename = "boxplot_enrichment.pdf", width = 15, height = 25)
+```
+
+```{r}
+pList = lapply(c(1*10^-10), function(p_cut) {
+  
+  idx_gene = goi_mat$p < p_cut & goi_mat$z > 0
+  goi1 = goi_mat$gene[idx_gene]
+  idx_gene = goi_mat$p < p_cut & goi_mat$z < 0
+  goi2 = goi_mat$gene[idx_gene]
+  
+  tmp = do.call(rbind, lapply(1:length(cepoMat), function(x) {
+    
+    mat = do.call(rbind, lapply(1:ncol(cepoMat[[x]]), function(y) {
+      
+      geneStats = rank(cepoMat[[x]][,y])
+      #geneIdx = intersect(names(goi_rank), names(test))
+      
+      p.in.up <- intersect(names(geneStats), goi1)
+      p.out.up <- setdiff(names(geneStats), goi1)
+      
+      p.in.down <- intersect(names(geneStats), goi2)
+      p.out.down <- setdiff(names(geneStats), goi2)
+      
+      wilcoxTest.mat <- matrix("NA", ncol = 4, nrow = 2)
+      colnames(wilcoxTest.mat) <- c("cty", "pvalue", "# of substrates",
+                                    "dir")
+      
+      wilcoxTest.mat[1, 1] <- colnames(cepoMat[[x]])[[y]]
+      wilcoxTest.mat[1, 2] <- stats::wilcox.test(geneStats[p.in.up],
+                                                 geneStats[p.out.up], alternative = "greater")$p.value
+      wilcoxTest.mat[1, 3] <- length(p.in.up)
+      wilcoxTest.mat[1, 4] <- "up"
+      
+      wilcoxTest.mat[2, 1] <- colnames(cepoMat[[x]])[[y]]
+      wilcoxTest.mat[2, 2] <- stats::wilcox.test(geneStats[p.in.down],
+                                                 geneStats[p.out.down], alternative = "greater")$p.value
+      wilcoxTest.mat[2, 3] <- length(p.in.down)
+      wilcoxTest.mat[2, 4] <- "down"
+      
+      
+      res = as.data.frame(wilcoxTest.mat[,1:4, drop = FALSE])
+      res$dataset = x
+      res$condition = unique(sceList[[x]]$Condition)
+      return(res)
+      
+    }))
+    mat = as.data.frame(mat)
+    mat$pvalue = as.numeric(mat$pvalue)
+    return(mat)
+    
+  }))
+  
+  matEnrich = tmp
+  matEnrich$interaction = interaction(matEnrich$cty, matEnrich$condition)
+  matEnrich$major = sapply(strsplit(matEnrich$cty, "___"), "[[", 1)
+  matEnrich$minor = sapply(strsplit(matEnrich$cty, "___"), "[[", 2)
+  
+  #matEnrich$major[matEnrich$minor %in% c("T", "B", "NK", "Natural.Killer.T")] = "Lymphoid"
+  matEnrich$logpvalue = -log10(matEnrich$pvalue)
+  matEnrich = matEnrich[matEnrich$major %in% c("Immune", "Lymphoid", "Myeloid"), ] 
+  matEnrich = matEnrich[!matEnrich$minor %in% c("Inner.Medullary.Collecting.Duct", "AT2", "Plasmacytoid.Dendritic", "Plasma"), ] 
+  
+  matEnrich$minor[matEnrich$minor %in% c("B")] = "B.cell.lineage"
+  matEnrich$minor[matEnrich$minor %in% c("T")] = "T.cell.lineage"
+  matEnrich$minor[matEnrich$minor %in% c("M2.Macrophage", "Macrophages")] = "Macrophage"
+  matEnrich$minor[matEnrich$minor %in% c("Mast.cells")] = "Mast"
+  matEnrich$minor[matEnrich$minor %in% c("Natural.Killer.T", 
+                                         "Innate.lymphoid.cell.NK")] = "NK"
+  matEnrich$minor[matEnrich$minor %in% c("Monocyte.cDC", "Classical.Dendritic", "Non.classical.monocyte")] = "Dendritic.cells"
+  matEnrich$minor[matEnrich$minor %in% c("Monocyte.derived")] = "Monocytes"
+
+  matEnrich$group = paste0(matEnrich$major, "_", matEnrich$minor, "_", matEnrich$dir)
+    
+  p = ggplot(matEnrich, aes(x = as.factor(dir), 
+                            y = -log10(pvalue), fill = as.factor(condition), col = as.factor(condition))) + 
+    #ggtitle(p_cut) + 
+    geom_boxplot(show.legend = TRUE, notch = FALSE, alpha = 0.5) +
+    #geom_jitter() + 
+    ggsci::scale_fill_lancet() +
+    ggsci::scale_color_lancet() +
+    facet_wrap(~minor+major, ncol = 14) + 
+    theme_bw()
+  
+  p1 = ggboxplot(matEnrich, x = "condition", y= "logpvalue", facet.by = "group", fill = "condition", ncol = 12,
+            add = "jitter", palette = "npg") + 
+    stat_compare_means(aes(method = "wilcox.test", label = paste0("p = ", after_stat(p.format))))
+  
+  return(p)
+  
+})
+
+ptosave = pList[[1]]
+ptosave %>% ggsave(filename = "boxplot_enrichment_minor.pdf", width = 15, height = 5)
+```
+
+```{r}
+rm(seuList, sceList)
+gc()
+
+#idx_control = unlist(lapply(sceList, function(x) unique(x$Condition))) == "Control"
+topGenes2 = Reduce(intersect, (lapply(cepoList, function(x) unique(unlist(Cepo::topGenes(x, n = 1000))))))
+topGenes2 = unique(unlist(lapply(cepoList, function(x) unique(unlist(Cepo::topGenes(x, n = 50))))))
+length(topGenes2)
+cepoMat2 = lapply(cepoList, function(x) {
+  idx = intersect(rownames(x$stats), topGenes2)
+  return(x$stats[idx,])
+})
+idx = Reduce(intersect, lapply(cepoMat2, rownames))
+length(idx)
+
+cepoMat_combined = do.call(cbind, lapply(cepoMat2, function(x) x[idx,]))
+corMat = cor(as.matrix(cepoMat_combined))
+colnames(corMat) = paste0(colnames(corMat), "___", rep(1:length(cepoMat2), sapply(cepoMat2, ncol)))
+corMat = corMat[!grepl("None|Neuronal", colnames(corMat)), !grepl("None|Neuronal", colnames(corMat))]
+annot = data.frame(
+  minor = sapply(strsplit(colnames(corMat), "___"), "[[", 2),
+  major = sapply(strsplit(colnames(corMat), "___"), "[[", 1),
+  condition = sapply(strsplit(colnames(corMat), "___"), "[[", 3)
+  #sample = sapply(strsplit(colnames(corMat), "___"), "[[", 4)
+)
+
+# major
+annot$major[annot$minor %in% c("T", "B", "NK", "Natural.Killer.T")] = "Immune"
+annot$major[annot$major %in% c("Mast", "Lymphoid", "Myeloid")] = "Immune"
+annot$major[annot$major %in% c("Proximal.Tubule", "Connecting.Tubule", "Distal.Convoluted.Tubule", 
+                               "Ascending.Thin.Limb", "Descending.Thin.Limb","Thick.Ascending.Limb",
+                               "Papillary.Tip.Epithelial", "Parietal.Epithelial", "Intercalated",
+                               "Pericyte", "Podocyte", "Principal")] = "Kidney"
+annot$major[annot$major %in% c("Alveolar.epithelium", "Airway.epithelium")] = "Lung"
+annot$major[annot$major %in% c("Smooth.muscle", "Smooth.Muscle", "Vascular.Smooth.Muscle...Pericyte",
+                               "Fibroblast.lineage", "Mesothelium", "Mesothelial",
+                               "Lymphatic.Endothelial", "Lymphatic.EC", "Endothelial",
+                               "Blood.vessels", "Fibroblast", "Adipocyte")] = "Stromal"
+annot$major[annot$major %in% c("Cardiomyocyte")] = "Heart"
+
+# minor
+annot$minor[annot$minor %in% c("B")] = "B.cell.lineage"
+annot$minor[annot$minor %in% c("T", "Natural.Killer.T")] = "T.cell.lineage"
+annot$minor[annot$minor %in% c("Afferent...Efferent.Arteriole.Endothelial", "Arterial.Endothelial", "EC.arterial", "EC.capillary", "EC.venous", "Venous.Endothelial", "Capillary.Endothelial")] = "Endothelial-Vascular"
+annot$minor[annot$minor %in% c("Glomerular.Capillary.Endothelial", "Ascending.Vasa.Recta.Endothelial", "Descending.Vasa.Recta.Endothelial.","Peritubular.Capilary.Endothelial.")] = "Endothelial-Kidney"
+annot$minor[annot$minor %in% c("Lymphatic.EC.differentiating", "Lymphatic.EC.mature", "Lymphatic.Endothelial")] = "Endothelial-Lymphatic"
+annot$minor[annot$minor %in% c("Macrophages", "M2.Macrophage")] = "Macrophage"
+annot$minor[annot$minor %in% c("Monocyte.cDC", "Monocyte.derived", "Monocytes", "Non.classical.monocyte")] = "Monocyte"
+annot$minor[annot$minor %in% c("AT1", "AT2")] = "AT"
+annot$minor[annot$minor %in% c("Innate.lymphoid.cell.NK")] = "NK"
+annot$minor[annot$minor %in% c("SM.activated.stress.response")] = "Smooth.Muscle"
+annot$minor[annot$minor %in% c("Cortical.Collecting.Duct.Intercalated.Type.A", "Cortical.Collecting.Duct.Principal",
+                               "Cortical.Collecting.Duct.Principal", "Connecting.Tubule",
+                               "Cortical.Collecting.Duct.Intercalated.Type.A",
+                               "Cortical.Collecting.Duct.Principal", "Inner.Medullary.Collecting.Duct",
+                               "Outer.Medullary.Collecting.Duct.Intercalated.Type.A",
+                               "Distal.Convoluted.Tubule")] = "Collecting duct/tubule"
+annot$minor[annot$minor %in% c("Cortical.Thick.Ascending.Limb",
+                               "Ascending.Thin.Limb",
+                               "Descending.Thin.Limb.Type.1",
+                               "Descending.Thin.Limb.Type.2",
+                               "Descending.Thin.Limb.Type.3",
+                               "Medullary.Thick.Ascending.Limb")] = "Descending/Ascending limb"
+annot$minor[annot$minor %in% c("Proximal.Tubule.Epithelial.Segment.1",
+                               "Proximal.Tubule.Epithelial.Segment.2",
+                               "Proximal.Tubule.Epithelial.Segment.3")] = "Proximal.Tubule.Epithelial.Segment"
+annot$minor[annot$minor %in% c("Intercalated.Type.B", "Proximal.Tubule.Epithelial.Segment", "Papillary.Tip.Epithelial", "Parietal.Epithelial")] = "Epithelial-Kidney"
+annot$minor[annot$minor %in% c("Dendritic.cells", "Classical.Dendritic")] = "Dendritic cells"
+annot$minor[annot$minor %in% c("Fibroblasts", "Medullary.Fibroblast", "Myofibroblasts")] = "Fibroblast"
+annot$minor[annot$minor %in% c("Mast.cells")] = "Mast"
+annot$minor[annot$minor %in% c("Mesangial", "Vascular.Smooth.Muscle...Pericyte", "Dendritic cells",
+                               "Cortical.Vascular.Smooth.Muscle...Pericyte",
+                               "Endocardial", "Adipocyte", "Pericyte")] = "Stromal"
+
+annot$major[annot$minor == "Ventricular.Cardiomycoyte"] = "Heart"
+annot$major[annot$minor == "AT"] = "Lung"
+annot$major[annot$minor == "Collecting duct/tubule"] = "Kidney"
+annot$major[annot$minor == "Endothelial-Kidney"] = "Stromal"
+annot$major[annot$minor == "Fibroblast"] = "Stromal"
+annot$major[annot$minor %in% c("Mast", "Monocyte")] = "Immune"
+
+table(annot$major, annot$minor)
+            
+rownames(annot) = colnames(corMat)
+annot$minor = as.factor(annot$minor)
+annot$major = as.factor(annot$major)
+
+my_col1 = colorRampPalette(RColorBrewer::brewer.pal(12, "Paired"))(length(unique(annot$major)))
+names(my_col1) = levels(annot$major)
+my_col2 = colorRampPalette(RColorBrewer::brewer.pal(12, "Paired"))(length(unique(annot$minor)))
+names(my_col2) = levels(annot$minor)
+
+my_col = list(major = my_col1, minor = my_col2)
+
+hclust = hclust(as.dist(corMat), method = "single")
+hclusters = cutree(hclust, k = 80)
+hclusters = cutree(hclust, k = 400)
+table(hclusters)
+
+pdf(file = "test3.pdf", width = 25, height = 20)
+idx_hclust = hclusters == names(which.max(table(hclusters)))
+table(idx_hclust)
+pheatmap::pheatmap(corMat[idx_hclust,idx_hclust], 
+                   annotation_col = annot, 
+                   annotation_colors = my_col,
+                   show_rownames = FALSE, show_colnames = FALSE)
+dev.off()
+```
+
+```{r}
+cepoMat_combined = do.call(cbind, lapply(cepoMat2, function(x) x[idx,]))
+colnames(cepoMat_combined) = paste0("_", rep(1:length(cepoMat2), sapply(cepoMat2, ncol)), "____", colnames(cepoMat_combined))
+cepoMat_subset = cepoMat_combined[, !grepl("None|Neuronal", colnames(cepoMat_combined))]
+cepoMat_subset = cepoMat_subset[, idx_hclust]
+
+pList = lapply(c(1*10^-10), function(p_cut) {
+  
+  idx_gene = goi_mat$p < p_cut & goi_mat$z > 0
+  goi1 = goi_mat$gene[idx_gene]
+  idx_gene = goi_mat$p < p_cut & goi_mat$z < 0
+  goi2 = goi_mat$gene[idx_gene]
+  
+  tmp = do.call(rbind, lapply(1:length(cepoMat), function(x) {
+
+    tmp2 = grep(paste0("_", x, "____"), colnames(cepoMat_subset), value = TRUE)
+    tmp2 = gsub(paste0("_", x, "____"), "", tmp2)
+    idx_tmp = colnames(cepoMat[[x]]) %in% tmp2
+    cepoMat_tmp = cepoMat[[x]][, idx_tmp, drop = FALSE]
+    
+    if (ncol(cepoMat_tmp) > 0) {
+    
+    mat = do.call(rbind, lapply(1:ncol(cepoMat_tmp), function(y) {
+      
+      
+      geneStats = rank(cepoMat_tmp[,y])
+      #geneIdx = intersect(names(goi_rank), names(test))
+      
+      p.in.up <- intersect(names(geneStats), goi1)
+      p.out.up <- setdiff(names(geneStats), goi1)
+      
+      p.in.down <- intersect(names(geneStats), goi2)
+      p.out.down <- setdiff(names(geneStats), goi2)
+      
+      wilcoxTest.mat <- matrix("NA", ncol = 4, nrow = 2)
+      colnames(wilcoxTest.mat) <- c("cty", "pvalue", "# of substrates",
+                                    "dir")
+      
+      wilcoxTest.mat[1, 1] <- colnames(cepoMat[[x]])[[y]]
+      wilcoxTest.mat[1, 2] <- stats::wilcox.test(geneStats[p.in.up],
+                                                 geneStats[p.out.up], alternative = "greater")$p.value
+      wilcoxTest.mat[1, 3] <- length(p.in.up)
+      wilcoxTest.mat[1, 4] <- "up"
+      
+      wilcoxTest.mat[2, 1] <- colnames(cepoMat[[x]])[[y]]
+      wilcoxTest.mat[2, 2] <- stats::wilcox.test(geneStats[p.in.down],
+                                                 geneStats[p.out.down], alternative = "greater")$p.value
+      wilcoxTest.mat[2, 3] <- length(p.in.down)
+      wilcoxTest.mat[2, 4] <- "down"
+      
+      
+      res = as.data.frame(wilcoxTest.mat[,1:4, drop = FALSE])
+      res$dataset = x
+      res$condition = unique(sceList[[x]]$Condition)
+      return(res)
+      
+    }))
+    mat = as.data.frame(mat)
+    mat$pvalue = as.numeric(mat$pvalue)
+    return(mat)
+          
+    }
+    
+  }))
+  
+  matEnrich = tmp
+  matEnrich$interaction = interaction(matEnrich$cty, matEnrich$condition)
+  matEnrich$major = sapply(strsplit(matEnrich$cty, "___"), "[[", 1)
+  matEnrich$minor = sapply(strsplit(matEnrich$cty, "___"), "[[", 2)
+  
+  #matEnrich$major[matEnrich$minor %in% c("T", "B", "NK", "Natural.Killer.T")] = "Lymphoid"
+  matEnrich$logpvalue = -log10(matEnrich$pvalue)
+  matEnrich = matEnrich[matEnrich$major %in% c("Immune", "Lymphoid", "Myeloid"), ] 
+  matEnrich = matEnrich[!matEnrich$minor %in% c("Inner.Medullary.Collecting.Duct", "AT2", "Plasmacytoid.Dendritic", "Plasma"), ] 
+  
+  matEnrich$minor[matEnrich$minor %in% c("B")] = "B.cell.lineage"
+  matEnrich$minor[matEnrich$minor %in% c("T")] = "T.cell.lineage"
+  matEnrich$minor[matEnrich$minor %in% c("M2.Macrophage", "Macrophages")] = "Macrophage"
+  matEnrich$minor[matEnrich$minor %in% c("Mast.cells")] = "Mast"
+  matEnrich$minor[matEnrich$minor %in% c("Natural.Killer.T", 
+                                         "Innate.lymphoid.cell.NK")] = "NK"
+  matEnrich$minor[matEnrich$minor %in% c("Monocyte.cDC", "Classical.Dendritic", "Non.classical.monocyte")] = "Dendritic.cells"
+  matEnrich$minor[matEnrich$minor %in% c("Monocyte.derived")] = "Monocytes"
+
+  matEnrich$group = paste0(matEnrich$major, "_", matEnrich$minor, "_", matEnrich$dir)
+    
+  p = ggplot(matEnrich, aes(x = as.factor(dir), 
+                            y = -log10(pvalue), fill = as.factor(condition), col = as.factor(condition))) + 
+    #ggtitle(p_cut) + 
+    geom_boxplot(show.legend = TRUE, notch = FALSE, alpha = 0.5) +
+    #geom_jitter() + 
+    ggsci::scale_fill_lancet() +
+    ggsci::scale_color_lancet() +
+    facet_wrap(~minor+major, ncol = 14) + 
+    theme_bw()
+  
+  p1 = ggboxplot(matEnrich, x = "condition", y= "logpvalue", facet.by = "group", fill = "condition", ncol = 12,
+            add = "jitter", palette = "npg") + 
+    stat_compare_means(aes(method = "wilcox.test", label = paste0("p = ", after_stat(p.format))))
+  
+  return(p)
+  
+})
+
+ptosave = pList[[1]]
+ptosave %>% ggsave(filename = "boxplot_enrichment_minor_filtered.pdf", width = 15, height = 5)
+```
+
+### Figure 2G
+
+```{r}
+# You may need to change this working direction to the dataset you just downloaded.
+setwd("~/Desktop/PhD/Pan Organ Allograft Dysfunction/Pan-Organ Allograft Dysfunction/Rejection/Normalised_Counts")
+files <- list.files(pattern = "Blood")
+Blood_Counts <- lapply(files, function(x){
+  y <- read.csv(x) 
+  y %>%
+    dplyr::select(-X) %>%
+    tibble::remove_rownames() %>%
+    filter(!duplicated(Gene_Symbol) & !is.na(Gene_Symbol)) %>%
+    tibble::column_to_rownames("Gene_Symbol") 
+})
+
+keep <- Blood_Counts %>% sapply(nrow) > 8000
+Blood_Counts <- Blood_Counts[keep]
+int <- Reduce(intersect, lapply(Blood_Counts, rownames))
+Blood_Counts <- lapply(Blood_Counts, function(x)x[int,])
+Counts_t <- lapply(Blood_Counts, t)
+
+Blood_outcome <- lapply(Blood_Counts, function(x){
+  factor(ifelse(grepl("Control", colnames(x)), "Control", "AR"))
+})
+
+Tissue <- sub(".csv", "", TOP:::str_split_n(files[keep], "_", 5))
+Tissue[Tissue == ""] <- "Kidney"
+```
+
+```{r}
+OrganSpecific_TOP <- function(OrganCounts, OrganOutcome){
+  roc_perf <- list()
+  for(i in seq_along(OrganCounts)){
+    # Identify features changed in training sets. Reduces computational time. 
+    sig.genes.Heart <- filterFeatures(x_list = OrganCounts[-i], y_list = OrganOutcome[-i], 
+                                      contrast = "AR - Control", 
+                                      combinationMethod = "Stouffer")
+    
+    # Subset by features from the training data.
+    Data_temp = lapply(OrganCounts, "[", , sig.genes.Heart)
+    
+    # Convert to a matrix, while removing the testing set i
+    x_list <- lapply(Data_temp, as.matrix)[-i]
+    y_list <- lapply(OrganOutcome, factor)[-i]
+
+    # Fit model on the training set.
+    fCPOP_model <- TOP_model(x_list, y_list, sample_weights = TRUE, optimiseExponent = FALSE)
+  
+    # Predict on the testing set.
+    pred <- predict_TOP(fCPOP_model$models, newx = Data_temp[[i]])
+
+    # Calculate performance metrics for later.
+    library(pROC)
+    roc_perf[[i]] <- roc(factor(OrganOutcome[[i]]), pred)
+  }
+  return(unlist(lapply(roc_perf, function(x)as.numeric(x$auc))))
+}
+```
+
+
+```{r}
+PanOrgan_TOP <- function(Counts_t, Blood_outcome, Tissue, Tissue_idx){
+  roc_perf <- list()
+    for(i in Tissue_idx){
+  
+    # Identify features changed in training sets. Reduces computational time. 
+    sig.genes.all <- filterFeatures(x_list = Counts_t, y_list = Blood_outcome, 
+                                  contrast = "AR - Control", 
+                                  combinationMethod = "Stouffer")
+    
+    # Subset by features from the training data.
+    Data_temp = lapply(Counts_t, "[", , sig.genes.all)
+
+    # Convert to a matrix, while removing the testing set i
+    x_list <- lapply(Data_temp, as.matrix)[-i]
+    y_list <- lapply(Blood_outcome, factor)[-i]
+
+    tissue_weights = rep(Tissue[-i], lapply(y_list, length))
+
+    # Fit model on the training set.
+    fCPOP_model <- TOP_model(x_list, y_list, 
+                           dataset_weights = tissue_weights,
+                           sample_weights = TRUE, 
+                           optimiseExponent = FALSE)
+    pred <- predict_TOP(fCPOP_model$models, newx = Data_temp[[i]])
+
+    # Calculate performance metrics for later.
+    library(pROC)
+    roc_perf[[i]] <- roc(factor(Blood_outcome[[i]]), pred)
+    }
+  roc_perf[!unlist(lapply(roc_perf, is.null))]
+  return(unlist(lapply(roc_perf, function(x)as.numeric(x$auc))))
+}
+```
+
+Let's predict the same datasets using all models.
+```{r}
+Heart <- Tissue == "Heart"
+Heart_idx <- which(Tissue == "Heart")
+
+Heart_Performance <- OrganSpecific_TOP(Counts_t[Heart], Blood_outcome[Heart])
+PanHeart_Performance <- PanOrgan_TOP(Counts_t, Blood_outcome, Tissue, Heart_idx)
+```
+
+Let's merge the two
+```{r}
+Dataset <- TOP:::str_split_n(files[Heart], "_", 2)
+
+names(Heart_Performance) <- Dataset
+Heart_Performance <- Heart_Performance %>% 
+  enframe() %>%
+  mutate(Metric = "AUC", Model = "Heart")
+
+names(PanHeart_Performance) <- Dataset
+PanHeart_Performance <- PanHeart_Performance %>% 
+  enframe() %>%
+  mutate(Metric = "AUC", Model = "All")
+
+Performance_Heart_models <- rbind(Heart_Performance, Full_Performance) %>%
+  mutate(Organ = "Heart")
+```
+
+Go predict Heart datasets using only Kidney data. 
+```{r}
+Tissue <- sub(".csv", "", TOP:::str_split_n(files[keep], "_", 5))
+Tissue[Tissue == ""] <- "Kidney"
+Kidney <- Tissue == "Kidney"
+Kidney_idx <- which(Tissue == "Kidney")
+
+Kidney_Performance <- OrganSpecific_TOP(Counts_t[Kidney], Blood_outcome[Kidney])
+PanKidney_Performance <- PanOrgan_TOP(Counts_t, Blood_outcome, Tissue, Kidney_idx)
+```
+
+```{r}
+Dataset <- TOP:::str_split_n(files[which(Kidney)], "_", 2)
+
+names(Kidney_Performance) <- Dataset
+Kidney_Performance <- Kidney_Performance %>% 
+  enframe() %>%
+  mutate(Metric = "AUC", Model = "Kidney")
+
+names(PanKidney_Performance) <- Dataset
+PanKidney_Performance <- PanKidney_Performance %>% 
+  enframe() %>%
+  mutate(Metric = "AUC", Model = "All")
+
+Performance_Kidney_models <- rbind(Kidney_Performance, PanKidney_Performance) %>%
+  filter(name != "GSE120649") %>% # Avoid double dipping control patients  
+  mutate(Organ = "Kidney")
+```
+
+Now we repeat for the liver datasets. 
+```{r}
+# You may need to change this working direction to the dataset you just downloaded.
+setwd("~/Desktop/PhD/Pan Organ Allograft Dysfunction/Pan-Organ Allograft Dysfunction/Rejection/Normalised_Counts")
+files <- list.files(pattern = "Blood")
+Blood_Counts <- lapply(files, function(x){
+  y <- read.csv(x) 
+  y %>%
+    dplyr::select(-X) %>%
+    tibble::remove_rownames() %>%
+    filter(!duplicated(Gene_Symbol) & !is.na(Gene_Symbol)) %>%
+    tibble::column_to_rownames("Gene_Symbol") 
+})
+int <- Reduce(intersect, lapply(Blood_Counts, rownames))
+Blood_Counts <- lapply(Blood_Counts, function(x)x[int,])
+Counts_t <- lapply(Blood_Counts, t)
+
+Blood_outcome <- lapply(Blood_Counts, function(x){
+  factor(ifelse(grepl("Control", colnames(x)), "Control", "AR"))
+})
+```
+
+Go predict Liver datasets using only Liver data. 
+```{r}
+Tissue <- sub(".csv", "", TOP:::str_split_n(files, "_", 5))
+Tissue[Tissue == ""] <- "Kidney"
+Liver <- Tissue == "Liver"
+
+Liver_counts = Counts_t[Liver]
+Liver_outcome = Blood_outcome[Liver]
+
+roc_Liver <- list()
+# Only two datasets, so a standard lasso is most comparable. 
+for(i in seq_along(Liver_counts)){
+  
+  model <- glmnet::cv.glmnet(Liver_counts[[i]], Liver_outcome[[i]], family = "binomial", alpha = 1)
+  pred <- predict(model, newx = Liver_counts[[-i]])
+
+  library(pROC)
+  roc_Liver[[i]] <- roc(factor(Liver_outcome[[-i]]), pred)
+}
+```
+
+Let's predict the same datasets using all datasets to build the pan-model.
+```{r}
+Liver_idx <- which(Tissue == "Liver")
+PanLiver_Performance <- PanOrgan_TOP(Counts_t, Blood_outcome, Tissue, Liver_idx)
+```
+
+
+```{r}
+Dataset <- TOP:::str_split_n(files, "_", 2)
+Dataset <- Dataset[Liver]
+Dataset <- make_clean_names(Dataset)
+
+Liver_Performance <- unlist(lapply(roc_Liver, function(x)as.numeric(x$auc)))
+names(Liver_Performance) <- Dataset
+Liver_Performance <- Liver_Performance %>% 
+  enframe() %>%
+  mutate(Metric = "AUC", Model = "Liver")
+
+PanLiver_Performance <- unlist(lapply(roc_AllLiver, function(x)as.numeric(x$auc)))
+names(PanLiver_Performance) <- Dataset
+PanLiver_Performance <- PanLiver_Performance %>% 
+  enframe() %>%
+  mutate(Metric = "AUC", Model = "All")
+
+Performance_Liver_models <- rbind(Liver_Performance, PanLiver_Performance) %>%
+  mutate(Organ = "Liver") 
+```
+
+```{r}
+perf_dfAll <- do.call("rbind", list(Performance_Heart_models, Performance_Kidney_models, Performance_Liver_models))
+data_foo <- perf_dfAll %>% mutate(new_x = factor(interaction(Organ,Model), 
+                                                 levels = c('Heart.Heart','Heart.All','Kidney.Kidney',
+                                                            'Kidney.All', "Liver.Liver", "Liver.All")))
+
+ggplot(data_foo, aes(x = new_x, y = value, fill = as.character(Model))) + 
+  geom_boxplot() + theme_bw() + geom_line(aes(group = name), alpha = 0.3) + 
+  scale_fill_manual(values = c("#ffa600", "#ff6361", "#0087c6", "#7a5195"), name = "Training\nDatasets") +
+  geom_point(aes(group = name), shape = 21, color = 'black') + theme(axis.text.x = element_blank()) +
+  xlab("") + ylab("AUC")
+
+data_foo <- data_foo %>%
+  group_by(new_x) %>%
+  summarise(median = median(value)) %>%
+  mutate(median = round(median, 2)) 
+colnames(data_foo) <- c("Model", "Median AUC")
+```
+
+### Figure 2H
+
+```{r}
+setwd("~/Desktop/PhD/Pan Organ Allograft Dysfunction/Pan-Organ Allograft Dysfunction/Rejection/Normalised_Counts")
+files <- list.files(pattern = "Blood")
+Blood_Counts <- lapply(files, function(x){
+  y <- read.csv(x) 
+  y %>%
+    dplyr::select(-X) %>%
+    tibble::remove_rownames() %>%
+    filter(!duplicated(Gene_Symbol) & !is.na(Gene_Symbol)) %>%
+    tibble::column_to_rownames("Gene_Symbol") 
+})
+
+int <- Reduce(intersect, lapply(Blood_Counts, rownames))
+Blood_Counts <- lapply(Blood_Counts, function(x)x[int,])
+Counts_t <- lapply(Blood_Counts, t)
+
+Blood_outcome <- lapply(Blood_Counts, function(x){
+  factor(ifelse(grepl("Control", colnames(x)), "Control", "AR"))
+})
+
+Tissue <- sub(".csv", "", TOP:::str_split_n(files, "_", 5))
+Tissue[Tissue == ""] <- "Kidney"
+tissue_list <- rep(Tissue, lapply(Blood_outcome, length))
+```
+
+
+```{r}
+library(TOP)
+
+# Pull out the top 50 genes across datasets. 
+sig.genes.all <- filterFeatures(x_list = Counts_t, y_list = Blood_outcome, 
+                                  contrast = "AR - Control", 
+                                  nFeatures = 50, combinationMethod = "Stouffer")
+Data_temp = lapply(Counts_t, "[", , sig.genes.all)
+
+x_list <- lapply(Data_temp, as.matrix)
+y_list <- lapply(Blood_outcome, factor)
+dataset_weights <- tissue_list # weights of the different organs. Makes a pan-organ model. 
+
+# Fit model on the training set. Again, there was a merge issue so TOP_model has been rewritten above.
+top_blood_model <- myTOP_model(x_list, y_list, dataset_weights = tissue_list, sample_weights = TRUE)
+PanOrgan_coefPlot <- TOP_coefPlot(top_blood_model, nFeatures = 20)
+
+# Next we will filter DGE$counts so that we can predict on the AUSCAD dataset.
+filt_lcpm <- DGE$counts[sig.genes.all,]
+rej_predictions <- TOP::predict_TOP(top_blood_model$models, newx = as.matrix(t(filt_lcpm)))
+
+# Add the predictions back to the DGElist object.
+DGE$samples$TOPrej_predictions <- as.numeric(rej_predictions)
+```
+
+
+# It will be interesting to see how our pan-organ model compares with one that was only built on kidney datasets. 
+```{r}
+# Lets just keep the datasets belonging to kidney transplant datasets.
+kidney_idx <- Tissue == "Kidney"
+filt_list <- Counts_t[kidney_idx]
+y_filt <- Blood_outcome[kidney_idx]
+
+# Filter to top 50 genes across datasets.
+kidney_features <- TOP::filterFeatures(filt_list, y_filt, contrast = "AR - Control", nFeatures = 50)
+kidney_counts = lapply(filt_list, "[", , kidney_features)
+
+# Fit model on the training set. Again, there was a merge issue so TOP_model has been rewritten above.
+kidney_model <- myTOP_model(kidney_counts, y_filt)
+Kidney_coefPlot <- TOP_coefPlot(kidney_model, nFeatures = 20)
+
+filt_lcpm <- DGE$counts[sig.genes.all,]
+kidrej_predictions <- TOP::predict_TOP(kidney_model$models, as.matrix(t(filt_lcpm)))
+
+# Add the predictions back to the DGElist object.
+DGE$samples$KIDrej_predictions <- as.numeric(kidrej_predictions)
+```
+
+# We can also compare the clinical data to our above models. To do so we will fit an ordinary glm.
+```{r}
+# Let's fit a model to creatinine, egfr and albumin. 
+clinical_model <- glm(factor(rej_3m) ~ cr_3m + egfr_3m + alb_3m, data=DGE$samples, family=binomial)
+data = DGE$samples %>%
+  dplyr::select(cr_3m, egfr_3m, alb_3m)
+
+# Store our predictions.
+clinical_predictions <- predict(clinical_model, data, type="response")
+
+# Add the predictions back to the DGElist object.
+DGE$samples$clinical_predictions <- as.numeric(clinical_predictions)
+```
+
+# I wanted to have some custom colours. So I rewrote the ROCplot function from TOP.
+```{r}
+myROC_Plot <- function (roc_list) 
+{
+    data.labels <- TOP:::extractAUC(roc_list)
+    pROC::ggroc(roc_list, size = 1.5) + theme_bw() +
+  scale_color_manual(name = "Model", values = c("#FF9DA7", "#0A87C6", "#FBA730"),
+                     labels = data.labels$label_long) +
+  geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), color = "grey50", linetype = "dashed") +
+  theme(legend.title = element_text(size = 14)) +
+  theme(legend.text = element_text(size = 12)) +
+  ggtitle("")
+}
+```
+
+# Plot the different ROC curves.
+```{r}
+n1 <- myROC_Plot(list(`Clinical Model` = roc(DGE$samples$rej_3m ~ DGE$samples$clinical_predictions)))
+
+n2 <- myROC_Plot(list(`Clinical Model` = roc(DGE$samples$rej_3m ~ DGE$samples$clinical_predictions),
+                  `Kidney Model` = roc(DGE$samples$rej_3m  ~ DGE$samples$KIDrej_predictions)))
+
+n3 <- myROC_Plot(list(`Clinical Model` = roc(DGE$samples$rej_3m ~ DGE$samples$clinical_predictions),
+                  `Kidney Model` = roc(DGE$samples$rej_3m  ~ DGE$samples$KIDrej_predictions),
+                  `PanOrgan Model` = roc(DGE$samples$rej_3m  ~ DGE$samples$TOPrej_predictions)))
+n3
+```
+
