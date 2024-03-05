@@ -966,8 +966,6 @@ rej_predictions <- TOP::predict_TOP(top_blood_model$models, newx = as.matrix(t(f
 DGE$samples$TOPrej_predictions <- as.numeric(rej_predictions)
 ```
 
-
-# It will be interesting to see how our pan-organ model compares with one that was only built on kidney datasets. 
 ```{r}
 # Lets just keep the datasets belonging to kidney transplant datasets.
 kidney_idx <- Tissue == "Kidney"
@@ -989,7 +987,6 @@ kidrej_predictions <- TOP::predict_TOP(kidney_model$models, as.matrix(t(filt_lcp
 DGE$samples$KIDrej_predictions <- as.numeric(kidrej_predictions)
 ```
 
-# We can also compare the clinical data to our above models. To do so we will fit an ordinary glm.
 ```{r}
 # Let's fit a model to creatinine, egfr and albumin. 
 clinical_model <- glm(factor(rej_3m) ~ cr_3m + egfr_3m + alb_3m, data=DGE$samples, family=binomial)
@@ -1003,7 +1000,6 @@ clinical_predictions <- predict(clinical_model, data, type="response")
 DGE$samples$clinical_predictions <- as.numeric(clinical_predictions)
 ```
 
-# I wanted to have some custom colours. So I rewrote the ROCplot function from TOP.
 ```{r}
 myROC_Plot <- function (roc_list) 
 {
@@ -1018,16 +1014,10 @@ myROC_Plot <- function (roc_list)
 }
 ```
 
-# Plot the different ROC curves.
 ```{r}
-n1 <- myROC_Plot(list(`Clinical Model` = roc(DGE$samples$rej_3m ~ DGE$samples$clinical_predictions)))
+myROC_Plot(list(`Clinical Model` = roc(DGE$samples$rej_3m ~ DGE$samples$clinical_predictions),
+                `Kidney Model` = roc(DGE$samples$rej_3m  ~ DGE$samples$KIDrej_predictions),
+                `PanOrgan Model` = roc(DGE$samples$rej_3m  ~ DGE$samples$TOPrej_predictions)))
 
-n2 <- myROC_Plot(list(`Clinical Model` = roc(DGE$samples$rej_3m ~ DGE$samples$clinical_predictions),
-                  `Kidney Model` = roc(DGE$samples$rej_3m  ~ DGE$samples$KIDrej_predictions)))
-
-n3 <- myROC_Plot(list(`Clinical Model` = roc(DGE$samples$rej_3m ~ DGE$samples$clinical_predictions),
-                  `Kidney Model` = roc(DGE$samples$rej_3m  ~ DGE$samples$KIDrej_predictions),
-                  `PanOrgan Model` = roc(DGE$samples$rej_3m  ~ DGE$samples$TOPrej_predictions)))
-n3
 ```
 
