@@ -1,0 +1,163 @@
+---
+title: "Untitled"
+author: "Harry Robertson"
+date: '2024-03-04'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(TOP)
+library(directPA)
+```
+
+# Figure 2
+
+## Identification of a pan-organ rejection signal across solid organ transplantation. 
+
+### Figure 2A
+
+Venn diagram showing the overlap and uniqueness of differentially expressed genes between biopsy samples from solid organ transplant recipients experiencing acute rejection and those from stably functioning grafts. The number of overlapping genes and (number of genes expected by chance)
+
+```{r}
+setwd("~/Downloads/Rejection/Processed_Datasets")
+files <- list.files(pattern = "Biopsy")[-1]
+Biopsy_Counts <- lapply(files, function(x){
+  y <- read.csv(x) 
+})
+colnames(Biopsy_Counts[[10]])[2] <- "Gene.Symbol"
+Biopsy_Counts <- lapply(Biopsy_Counts, function(x){
+  x %>%
+    dplyr::select(-X) %>%
+    tibble::remove_rownames() %>%
+    filter(!duplicated(Gene.Symbol) & !is.na(Gene.Symbol)) %>%
+    tibble::column_to_rownames("Gene.Symbol") %>%
+    dplyr::select(t)
+})
+
+keep <- Biopsy_Counts %>% sapply(nrow) > 8000
+Biopsy_Counts <- Biopsy_Counts[keep]
+
+int <- Reduce(intersect, lapply(Biopsy_Counts, rownames))
+test_list <-  lapply(Biopsy_Counts, function(x)x[int,, drop = FALSE])
+
+test_df <- do.call(cbind, test_list)
+Z.Scores.All <- apply(test_df, 2, function(x) {
+        stats::qnorm(rank(x)/(nrow(test_df) + 1))
+})
+data(Pathways, package = "directPA")
+gene.pvalues <- apply(Z.Scores.All, 1, function(x) {
+  directPA::geneStats(x)
+})
+gene.zscores <- stats::qnorm(gene.pvalues, lower.tail = FALSE)
+pvalue2sided <- 2 * stats::pnorm(-abs(gene.zscores))
+sig.genes <- names(sort(pvalue2sided[pvalue2sided < 1*10^-35]))
+
+# Plotting Results
+GSE <- paste(TOP:::str_split_n(files[keep], "_", 2), sub(".csv", "", TOP:::str_split_n(files[keep], "_", 4)), sep = "_")
+Tissue <- sub(".csv", "", TOP:::str_split_n(files[keep], "_", 5))
+Tissue[Tissue == ""] <- "Kidney"
+anno_df <- data.frame(GSE, Tissue, row.names = paste("Dataset", 1:length(Tissue)))
+
+Z.Score.Significant <- Z.Scores.All[which(rownames(Z.Scores.All) %in% sig.genes),]
+colnames(Z.Score.Significant) <- rownames(anno_df)
+```
+
+```{r}
+Kidney_idx <- Tissue == "Kidney"
+Liver_idx <- Tissue == "Liver"
+Lung_idx <- Tissue == "Lung"
+Heart_idx <- Tissue == "Heart"
+
+test_df.Kidney <- test_df[,Kidney_idx]
+test_df.Liver <- test_df[,Liver_idx]
+test_df.Lung <- test_df[,Lung_idx]
+test_df.Heart <- test_df[,Heart_idx]
+
+Gene_sets <- lapply(list(test_df.Kidney, test_df.Liver, test_df.Lung, test_df.Heart), function(x){
+  Z.Scores.All <- apply(x, 2, function(y) {
+        stats::qnorm(rank(y)/(nrow(x) + 1))
+  })
+  data(Pathways, package = "directPA")
+  gene.pvalues <- apply(Z.Scores.All, 1, function(y) {
+    directPA::geneStats(y)
+  })
+  gene.zscores <- stats::qnorm(gene.pvalues, lower.tail = FALSE)
+  return(gene.zscores)
+})
+
+names(Gene_sets) <- c("Kidney", "Liver", "Lung", "Heart")
+
+df <- do.call(cbind, lapply(Gene_sets, tibble::enframe))
+df <- df[,grep("value", colnames(df))]
+rownames(df) <- names(Gene_sets[[1]])
+df <- df[!is.infinite(rowMeans(df)),]
+
+library(GGally)
+library(ggfortify)
+
+df_venn <- abs(df) > 2 
+df_venn %>%
+  data.frame()
+
+chi_square <- chisq.test(apply(df_venn, 2, table))
+chi_square$residuals
+
+tab <- table(df_venn[,1], df_venn[,2], df_venn[,3], df_venn[, 4])
+tab <- as.data.frame(tab)
+
+library(ggvenn)
+df_venn %>%
+  data.frame() %>%
+  ggplot() +
+  geom_venn(aes(A = Kidney.value, B = Liver.value, C = Lung.value, D = Heart.value),show_percentage = F,
+            set_names = c("Kidney", "Liver", "Lung", "Heart")) + theme_void()
+```
+
+
+```{r}
+library(UpSetR)
+upset_df <- df_venn %>%
+  data.frame() 
+upset_df[] <- lapply(upset_df, as.numeric)
+UpSetR::upset(upset_df, sets = colnames(upset_df))
+
+tab <- table(upset_df)
+
+marginal1 <- rowSums(tab) / sum(tab)
+marginal2 <- colSums(tab) / sum(tab)
+marginal3 <- apply(tab, 3, sum) / sum(tab)
+marginal4 <- apply(tab, 4, sum) / sum(tab)
+
+prob <- array(0, dim = dim(tab))
+for (i in 1:dim(tab)[1]) {
+  for (j in 1:dim(tab)[2]) {
+    for (k in 1:dim(tab)[3]) {
+      for (l in 1:dim(tab)[4]) {
+        prob[i,j,k,l] <- marginal1[i] * marginal2[j] * marginal3[k] * marginal4[l]
+      }
+    }
+  }
+}
+exp <- prob*nrow(upset_df)
+residuals <- (tab - exp) / sqrt(exp)
+residuals_df <- residuals %>%
+  data.frame()
+```
+
+### Figure 2B
+
+Heatmap of the top 50 rejection-specific genes, with each column representing a dataset and each row a gene.
+
+```{r}
+colnames(Z.Score.Significant) <- GSE
+library(pheatmap)
+pheatmap::pheatmap(Z.Score.Significant,
+         color = colorRampPalette(c("blue", "navy", "white", "firebrick3", "red"))(1500),
+         cellwidth = 8,
+         cellheight = 10,
+         angle_col = 315,
+         show_colnames = FALSE)
+
+```

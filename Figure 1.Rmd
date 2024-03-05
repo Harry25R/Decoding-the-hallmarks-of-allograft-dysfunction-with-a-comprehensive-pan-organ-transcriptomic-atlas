@@ -9,22 +9,12 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+# Figure 1
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+Figure 1 highlights the main aims of the paper, and apart from the metrics associated with the scale of PROAMD. There is little in the way of reproducibility. Instead, this markdown servers as a vignette to using PROMAD. Currently data needs to be manually downloaded from the PROMAD website and loaded into R.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+To do so, navigate to
 
-```{r cars}
-summary(cars)
+```{r}
+
 ```
-
-## Including Plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
-```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
